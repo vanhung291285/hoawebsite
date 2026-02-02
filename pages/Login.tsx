@@ -21,12 +21,12 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess, onNavigate }) => {
     setLoading(true);
 
     try {
-        const user = await DatabaseService.login(username, password);
+        const user = await DatabaseService.login(username.trim(), password.trim());
         
         if (user) {
             onLoginSuccess(user);
         } else {
-            setError('Tên đăng nhập hoặc mật khẩu không đúng.');
+            setError('Tên đăng nhập (Email) hoặc mật khẩu không đúng.');
         }
     } catch (e) {
         console.error(e);
@@ -65,13 +65,13 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess, onNavigate }) => {
 
         <form onSubmit={handleSubmit} className="space-y-6">
            <div>
-             <label className="block text-sm font-bold text-gray-700 mb-2">Tên đăng nhập</label>
+             <label className="block text-sm font-bold text-gray-700 mb-2">Tên đăng nhập / Email</label>
              <div className="relative">
                 <UserIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                 <input 
                   type="text" 
                   className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
-                  placeholder="admin"
+                  placeholder="admin hoặc admin@school.edu.vn"
                   value={username}
                   onChange={e => setUsername(e.target.value)}
                   required

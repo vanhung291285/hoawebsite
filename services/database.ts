@@ -3,29 +3,51 @@ import { supabase, isSupabaseConfigured } from './supabaseClient';
 import { Post, SchoolConfig, SchoolDocument, GalleryImage, GalleryAlbum, User, MenuItem, DisplayBlock, DocumentCategory, StaffMember, IntroductionArticle, PostCategory, Video } from '../types';
 import { MockDb } from './mockDb';
 
-// Initialize MockDb if needed
-MockDb.init();
+// Initialize MockDb ONLY if Supabase is NOT configured.
+// This prevents LocalStorage quota errors when the user intends to use Supabase.
+if (!isSupabaseConfigured) {
+  console.log("Supabase not configured, initializing Mock DB...");
+  MockDb.init();
+} else {
+  console.log("Supabase configured, skipping Mock DB init.");
+}
+
+const ensureMockDb = () => {
+    // Helper to ensure mock data is ready if we fallback
+    MockDb.init();
+};
 
 export const DatabaseService = {
   // --- AUTH ---
-  login: async (username: string, password: string): Promise<User | null> => {
-    // Ưu tiên dùng MockDb nếu chưa cấu hình Supabase
+  login: async (usernameOrEmail: string, password: string): Promise<User | null> => {
+    // Luôn cắt khoảng trắng thừa
+    const cleanInput = usernameOrEmail.trim();
+    const cleanPass = password.trim();
+
     if (!isSupabaseConfigured) {
-        return MockDb.login(username, password);
+        ensureMockDb();
+        return MockDb.login(cleanInput, cleanPass);
     }
 
     try {
+        // Sử dụng .or để tìm kiếm theo username HOẶC email
+        // QUAN TRỌNG: Bọc giá trị trong dấu ngoặc kép "..." để PostgREST xử lý đúng ký tự đặc biệt như @
+        // Dùng ilike cho email để không phân biệt hoa thường
         const { data, error } = await supabase
           .from('users')
           .select('*')
-          .eq('username', username)
-          .eq('password', password)
-          .single();
+          .or(`username.eq."${cleanInput}",email.ilike."${cleanInput}"`)
+          .eq('password', cleanPass)
+          .maybeSingle(); 
 
         if (error) {
             console.warn("Supabase login error (falling back to mock):", error.message);
-            // Fallback to MockDb login in case table doesn't exist or connection fails
-            return MockDb.login(username, password);
+            // Mã lỗi PGRST116 nghĩa là trả về nhiều dòng hoặc không có dòng nào (khi dùng single), dùng maybeSingle đã xử lý việc này nhưng cứ giữ check.
+            if (error.code === 'PGRST116') return null; 
+            
+            // Nếu lỗi kết nối, thử dùng mock
+            ensureMockDb();
+            return MockDb.login(cleanInput, cleanPass);
         }
         
         if (!data) return null;
@@ -34,7 +56,8 @@ export const DatabaseService = {
         return data as User;
     } catch (err) {
         console.error("Login exception:", err);
-        return MockDb.login(username, password);
+        ensureMockDb();
+        return MockDb.login(cleanInput, cleanPass);
     }
   },
 
@@ -57,7 +80,10 @@ export const DatabaseService = {
 
   // --- CONFIG ---
   getConfig: async (): Promise<SchoolConfig> => {
-    if (!isSupabaseConfigured) return MockDb.getConfig();
+    if (!isSupabaseConfigured) {
+        ensureMockDb();
+        return MockDb.getConfig();
+    }
 
     try {
         const { data, error } = await supabase.from('school_config').select('*').limit(1).single();
@@ -81,12 +107,16 @@ export const DatabaseService = {
         };
     } catch (e) {
         console.warn("Using Mock Config due to error:", e);
+        ensureMockDb();
         return MockDb.getConfig();
     }
   },
 
   saveConfig: async (config: SchoolConfig) => {
-    if (!isSupabaseConfigured) return MockDb.saveConfig(config);
+    if (!isSupabaseConfigured) {
+        ensureMockDb();
+        return MockDb.saveConfig(config);
+    }
 
     const payload = {
         name: config.name,
@@ -126,7 +156,10 @@ export const DatabaseService = {
 
   // --- POSTS ---
   getPosts: async (limitCount: number = 50): Promise<Post[]> => {
-    if (!isSupabaseConfigured) return MockDb.getPosts();
+    if (!isSupabaseConfigured) {
+        ensureMockDb();
+        return MockDb.getPosts();
+    }
 
     try {
         const { data, error } = await supabase
@@ -145,12 +178,16 @@ export const DatabaseService = {
             attachments: p.attachments || []
         }));
     } catch (e) {
+        ensureMockDb();
         return MockDb.getPosts();
     }
   },
 
   savePost: async (post: Post) => {
-    if (!isSupabaseConfigured) return MockDb.savePost(post);
+    if (!isSupabaseConfigured) {
+        ensureMockDb();
+        return MockDb.savePost(post);
+    }
 
     const payload = {
         title: post.title,
@@ -179,13 +216,19 @@ export const DatabaseService = {
   },
 
   deletePost: async (id: string) => {
-    if (!isSupabaseConfigured) return MockDb.deletePost(id);
+    if (!isSupabaseConfigured) {
+        ensureMockDb();
+        return MockDb.deletePost(id);
+    }
     await supabase.from('posts').delete().eq('id', id);
   },
 
   // --- STAFF ---
   getStaff: async (): Promise<StaffMember[]> => {
-    if (!isSupabaseConfigured) return MockDb.getStaff();
+    if (!isSupabaseConfigured) {
+        ensureMockDb();
+        return MockDb.getStaff();
+    }
 
     try {
         const { data, error } = await supabase.from('staff').select('*').order('order_index', { ascending: true });
@@ -200,12 +243,16 @@ export const DatabaseService = {
             order: s.order_index
         }));
     } catch (e) {
+        ensureMockDb();
         return MockDb.getStaff();
     }
   },
   
   saveStaff: async (staff: StaffMember) => {
-    if (!isSupabaseConfigured) return MockDb.saveStaff(staff);
+    if (!isSupabaseConfigured) {
+        ensureMockDb();
+        return MockDb.saveStaff(staff);
+    }
 
     const payload = {
         full_name: staff.fullName,
@@ -224,13 +271,19 @@ export const DatabaseService = {
   },
 
   deleteStaff: async (id: string) => {
-    if (!isSupabaseConfigured) return MockDb.deleteStaff(id);
+    if (!isSupabaseConfigured) {
+        ensureMockDb();
+        return MockDb.deleteStaff(id);
+    }
     await supabase.from('staff').delete().eq('id', id);
   },
 
   // --- DOCUMENTS ---
   getDocuments: async (): Promise<SchoolDocument[]> => {
-    if (!isSupabaseConfigured) return MockDb.getDocuments();
+    if (!isSupabaseConfigured) {
+        ensureMockDb();
+        return MockDb.getDocuments();
+    }
 
     try {
         const { data, error } = await supabase.from('documents').select('*');
@@ -244,12 +297,16 @@ export const DatabaseService = {
             downloadUrl: d.download_url
         }));
     } catch (e) {
+        ensureMockDb();
         return MockDb.getDocuments();
     }
   },
 
   saveDocument: async (doc: SchoolDocument) => {
-    if (!isSupabaseConfigured) return MockDb.saveDocument(doc);
+    if (!isSupabaseConfigured) {
+        ensureMockDb();
+        return MockDb.saveDocument(doc);
+    }
 
     const payload = {
         number: doc.number,
@@ -267,13 +324,19 @@ export const DatabaseService = {
   },
 
   deleteDocument: async (id: string) => {
-      if (!isSupabaseConfigured) return MockDb.deleteDocument(id);
+      if (!isSupabaseConfigured) {
+          ensureMockDb();
+          return MockDb.deleteDocument(id);
+      }
       await supabase.from('documents').delete().eq('id', id);
   },
 
   // --- GALLERY ---
   getAlbums: async (): Promise<GalleryAlbum[]> => {
-    if (!isSupabaseConfigured) return MockDb.getAlbums();
+    if (!isSupabaseConfigured) {
+        ensureMockDb();
+        return MockDb.getAlbums();
+    }
 
     try {
         const { data, error } = await supabase.from('gallery_albums').select('*').order('created_at', { ascending: false });
@@ -286,12 +349,16 @@ export const DatabaseService = {
             createdDate: a.created_date || (a.created_at ? a.created_at.split('T')[0] : '')
         }));
     } catch (e) {
+        ensureMockDb();
         return MockDb.getAlbums();
     }
   },
 
   saveAlbum: async (album: GalleryAlbum) => {
-    if (!isSupabaseConfigured) return MockDb.saveAlbum(album);
+    if (!isSupabaseConfigured) {
+        ensureMockDb();
+        return MockDb.saveAlbum(album);
+    }
 
     const payload = {
         title: album.title,
@@ -307,13 +374,19 @@ export const DatabaseService = {
   },
 
   deleteAlbum: async (id: string) => {
-      if (!isSupabaseConfigured) return MockDb.deleteAlbum(id);
+      if (!isSupabaseConfigured) {
+          ensureMockDb();
+          return MockDb.deleteAlbum(id);
+      }
       await supabase.from('gallery_images').delete().eq('album_id', id);
       await supabase.from('gallery_albums').delete().eq('id', id);
   },
 
   getGallery: async (): Promise<GalleryImage[]> => {
-     if (!isSupabaseConfigured) return MockDb.getGallery();
+     if (!isSupabaseConfigured) {
+         ensureMockDb();
+         return MockDb.getGallery();
+     }
 
      try {
          const { data, error } = await supabase.from('gallery_images').select('*').order('created_at', { ascending: false });
@@ -325,12 +398,16 @@ export const DatabaseService = {
              albumId: i.album_id
          }));
      } catch (e) {
+         ensureMockDb();
          return MockDb.getGallery();
      }
   },
 
   saveImage: async (image: GalleryImage) => {
-    if (!isSupabaseConfigured) return MockDb.saveImage(image);
+    if (!isSupabaseConfigured) {
+        ensureMockDb();
+        return MockDb.saveImage(image);
+    }
 
     const payload = {
         url: image.url,
@@ -341,13 +418,19 @@ export const DatabaseService = {
   },
 
   deleteImage: async (id: string) => {
-      if (!isSupabaseConfigured) return MockDb.deleteImage(id);
+      if (!isSupabaseConfigured) {
+          ensureMockDb();
+          return MockDb.deleteImage(id);
+      }
       await supabase.from('gallery_images').delete().eq('id', id);
   },
 
   // --- BLOCKS ---
   getBlocks: async (): Promise<DisplayBlock[]> => {
-      if (!isSupabaseConfigured) return MockDb.getBlocks();
+      if (!isSupabaseConfigured) {
+          ensureMockDb();
+          return MockDb.getBlocks();
+      }
 
       try {
           const { data, error } = await supabase.from('display_blocks').select('*').order('order_index', { ascending: true });
@@ -366,12 +449,16 @@ export const DatabaseService = {
               customTextColor: b.custom_text_color
           }));
       } catch (e) {
+          ensureMockDb();
           return MockDb.getBlocks();
       }
   },
 
   saveBlock: async (block: DisplayBlock) => {
-      if (!isSupabaseConfigured) return MockDb.saveBlock(block);
+      if (!isSupabaseConfigured) {
+          ensureMockDb();
+          return MockDb.saveBlock(block);
+      }
 
       const payload = {
           name: block.name,
@@ -394,12 +481,18 @@ export const DatabaseService = {
   },
 
   deleteBlock: async (id: string) => {
-      if (!isSupabaseConfigured) return MockDb.deleteBlock(id);
+      if (!isSupabaseConfigured) {
+          ensureMockDb();
+          return MockDb.deleteBlock(id);
+      }
       await supabase.from('display_blocks').delete().eq('id', id);
   },
 
   saveBlocksOrder: async (blocks: DisplayBlock[]) => {
-      if (!isSupabaseConfigured) return MockDb.saveBlocksOrder(blocks);
+      if (!isSupabaseConfigured) {
+          ensureMockDb();
+          return MockDb.saveBlocksOrder(blocks);
+      }
       for (const block of blocks) {
           await supabase.from('display_blocks').update({ order_index: block.order }).eq('id', block.id);
       }
@@ -407,7 +500,10 @@ export const DatabaseService = {
 
   // --- MENU ---
   getMenu: async (): Promise<MenuItem[]> => {
-      if (!isSupabaseConfigured) return MockDb.getMenu();
+      if (!isSupabaseConfigured) {
+          ensureMockDb();
+          return MockDb.getMenu();
+      }
 
       try {
           const { data, error } = await supabase.from('menu_items').select('*').order('order_index', { ascending: true });
@@ -419,12 +515,16 @@ export const DatabaseService = {
               order: m.order_index
           }));
       } catch (e) {
+          ensureMockDb();
           return MockDb.getMenu();
       }
   },
 
   saveMenu: async (items: MenuItem[]) => {
-      if (!isSupabaseConfigured) return MockDb.saveMenu(items);
+      if (!isSupabaseConfigured) {
+          ensureMockDb();
+          return MockDb.saveMenu(items);
+      }
 
       for (const item of items) {
           const payload = { label: item.label, path: item.path, order_index: item.order };
@@ -437,7 +537,7 @@ export const DatabaseService = {
   },
 
   deleteMenu: async (id: string) => {
-    if (!isSupabaseConfigured) return; // MockDb deleteMenu is tricky in array, skipping for brevity
+    if (!isSupabaseConfigured) return; 
     await supabase.from('menu_items').delete().eq('id', id);
   },
 
@@ -478,7 +578,10 @@ export const DatabaseService = {
 
   // --- DOC CATEGORIES ---
   getDocCategories: async (): Promise<DocumentCategory[]> => {
-    if (!isSupabaseConfigured) return MockDb.getDocCategories();
+    if (!isSupabaseConfigured) {
+        ensureMockDb();
+        return MockDb.getDocCategories();
+    }
 
     try {
         const { data, error } = await supabase.from('document_categories').select('*').order('order_index', { ascending: true });
@@ -491,12 +594,16 @@ export const DatabaseService = {
             order: c.order_index 
         }));
     } catch (e) {
+        ensureMockDb();
         return MockDb.getDocCategories();
     }
   },
 
   saveDocCategory: async (cat: DocumentCategory) => {
-    if (!isSupabaseConfigured) return MockDb.saveDocCategory(cat);
+    if (!isSupabaseConfigured) {
+        ensureMockDb();
+        return MockDb.saveDocCategory(cat);
+    }
 
     const payload = { name: cat.name, slug: cat.slug, description: cat.description, order_index: cat.order };
     if (cat.id && cat.id.length > 10) {
@@ -507,7 +614,10 @@ export const DatabaseService = {
   },
 
   deleteDocCategory: async (id: string) => {
-      if (!isSupabaseConfigured) return MockDb.deleteDocCategory(id);
+      if (!isSupabaseConfigured) {
+          ensureMockDb();
+          return MockDb.deleteDocCategory(id);
+      }
       await supabase.from('document_categories').delete().eq('id', id);
   },
 
@@ -598,7 +708,10 @@ export const DatabaseService = {
 
   // --- USERS ---
   getUsers: async (): Promise<User[]> => {
-    if (!isSupabaseConfigured) return MockDb.getUsers();
+    if (!isSupabaseConfigured) {
+        ensureMockDb();
+        return MockDb.getUsers();
+    }
 
     try {
         const { data, error } = await supabase.from('users').select('*');
@@ -611,12 +724,16 @@ export const DatabaseService = {
             email: u.email
         }));
     } catch (e) {
+        ensureMockDb();
         return MockDb.getUsers();
     }
   },
 
   saveUser: async (user: User) => {
-    if (!isSupabaseConfigured) return MockDb.saveUser(user);
+    if (!isSupabaseConfigured) {
+        ensureMockDb();
+        return MockDb.saveUser(user);
+    }
 
     const payload = {
         username: user.username,
@@ -635,7 +752,10 @@ export const DatabaseService = {
   },
 
   deleteUser: async (id: string) => {
-      if (!isSupabaseConfigured) return MockDb.deleteUser(id);
+      if (!isSupabaseConfigured) {
+          ensureMockDb();
+          return MockDb.deleteUser(id);
+      }
       await supabase.from('users').delete().eq('id', id);
   },
 };

@@ -16,15 +16,39 @@ const STORAGE_KEYS = {
   STAFF: 'vinaedu_staff_v1'
 };
 
-const safeSetItem = (key: string, value: string) => {
+const safeSetItem = (key: string, value: string): boolean => {
   try {
     localStorage.setItem(key, value);
+    return true;
   } catch (e: any) {
     if (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED') {
-      console.error(`LocalStorage quota exceeded when saving ${key}`);
-      alert("⚠️ CẢNH BÁO: Bộ nhớ trình duyệt đã đầy! Dữ liệu vừa nhập (đặc biệt là ảnh) không thể lưu lại. Vui lòng xóa bớt dữ liệu cũ hoặc sử dụng ảnh có dung lượng nhỏ hơn.");
+      console.warn(`LocalStorage quota exceeded when saving ${key}. Clearing old data and retrying...`);
+      // Simple cleanup strategy: Remove keys that are likely old versions or large temp data
+      try {
+        const keysToRemove = [];
+        for (let i = 0; i < localStorage.length; i++) {
+           const k = localStorage.key(i);
+           if (k && k.startsWith('vinaedu_') && !Object.values(STORAGE_KEYS).includes(k)) {
+               keysToRemove.push(k);
+           }
+        }
+        keysToRemove.forEach(k => localStorage.removeItem(k));
+        
+        // Retry once
+        try {
+            localStorage.setItem(key, value);
+            return true;
+        } catch (retryErr) {
+            console.error(`Retry failed for ${key}. Storage is genuinely full.`);
+            return false;
+        }
+      } catch (cleanupErr) {
+        console.error("Error during storage cleanup", cleanupErr);
+        return false;
+      }
     } else {
       console.error(`Error saving ${key}:`, e);
+      return false;
     }
   }
 };
@@ -264,8 +288,16 @@ const DEFAULT_STAFF: StaffMember[] = [
 
 export const MockDb = {
   init: () => {
+    // Only init if INIT key is missing AND we can successfully write to storage
     if (!localStorage.getItem(STORAGE_KEYS.INIT)) {
-      safeSetItem(STORAGE_KEYS.CONFIG, JSON.stringify(DEFAULT_CONFIG));
+      console.log("Initializing Mock DB with default data...");
+      
+      // Try to save config first as a test
+      if (!safeSetItem(STORAGE_KEYS.CONFIG, JSON.stringify(DEFAULT_CONFIG))) {
+          console.warn("Storage full or unavailable. Using in-memory defaults.");
+          return;
+      }
+
       safeSetItem(STORAGE_KEYS.POSTS, JSON.stringify(DEFAULT_POSTS));
       safeSetItem(STORAGE_KEYS.DOCS, JSON.stringify(DEFAULT_DOCS));
       safeSetItem(STORAGE_KEYS.DOC_CATS, JSON.stringify(DEFAULT_DOC_CATS));
@@ -279,10 +311,19 @@ export const MockDb = {
     }
   },
 
-  getConfig: (): SchoolConfig => JSON.parse(localStorage.getItem(STORAGE_KEYS.CONFIG) || '{}'),
+  getConfig: (): SchoolConfig => {
+    try {
+        const data = localStorage.getItem(STORAGE_KEYS.CONFIG);
+        return data ? JSON.parse(data) : DEFAULT_CONFIG;
+    } catch {
+        return DEFAULT_CONFIG;
+    }
+  },
   
   saveConfig: (config: SchoolConfig) => {
-    safeSetItem(STORAGE_KEYS.CONFIG, JSON.stringify(config));
+    if (!safeSetItem(STORAGE_KEYS.CONFIG, JSON.stringify(config))) {
+        throw new Error("Không thể lưu cấu hình do bộ nhớ đầy.");
+    }
   },
 
   // Visitor Stats
@@ -297,8 +338,12 @@ export const MockDb = {
 
   // Auth & Users
   login: (username: string, password: string): User | null => {
-    const users: User[] = JSON.parse(localStorage.getItem(STORAGE_KEYS.USERS) || '[]');
-    const user = users.find(u => u.username === username && u.password === password);
+    const users: User[] = JSON.parse(localStorage.getItem(STORAGE_KEYS.USERS) || JSON.stringify(DEFAULT_USERS));
+    // Check username OR email (case-insensitive for email)
+    const user = users.find(u => 
+      (u.username === username || (u.email && u.email.toLowerCase() === username.toLowerCase())) && 
+      u.password === password
+    );
     if (user) {
       const { password, ...safeUser } = user;
       safeSetItem(STORAGE_KEYS.SESSION, JSON.stringify(safeUser));
@@ -316,7 +361,7 @@ export const MockDb = {
     return session ? JSON.parse(session) : null;
   },
 
-  getUsers: (): User[] => JSON.parse(localStorage.getItem(STORAGE_KEYS.USERS) || '[]'),
+  getUsers: (): User[] => JSON.parse(localStorage.getItem(STORAGE_KEYS.USERS) || JSON.stringify(DEFAULT_USERS)),
   saveUser: (user: User) => {
     const users = MockDb.getUsers();
     if (!user.password) user.password = '123456'; 
@@ -335,12 +380,12 @@ export const MockDb = {
   },
 
   // Posts
-  getPosts: (): Post[] => JSON.parse(localStorage.getItem(STORAGE_KEYS.POSTS) || '[]'),
+  getPosts: (): Post[] => JSON.parse(localStorage.getItem(STORAGE_KEYS.POSTS) || JSON.stringify(DEFAULT_POSTS)),
   savePost: (post: Post) => {
     const posts = MockDb.getPosts();
     const index = posts.findIndex(p => p.id === post.id);
     if (index >= 0) posts[index] = post; else posts.unshift(post);
-    safeSetItem(STORAGE_KEYS.POSTS, JSON.stringify(posts));
+    if (!safeSetItem(STORAGE_KEYS.POSTS, JSON.stringify(posts))) throw new Error("Storage Full");
   },
   deletePost: (id: string) => {
     const posts = MockDb.getPosts().filter(p => p.id !== id);
@@ -348,7 +393,7 @@ export const MockDb = {
   },
 
   // Blocks
-  getBlocks: (): DisplayBlock[] => JSON.parse(localStorage.getItem(STORAGE_KEYS.BLOCKS) || '[]'),
+  getBlocks: (): DisplayBlock[] => JSON.parse(localStorage.getItem(STORAGE_KEYS.BLOCKS) || JSON.stringify(DEFAULT_BLOCKS)),
   saveBlock: (block: DisplayBlock) => {
     const blocks = MockDb.getBlocks();
     const index = blocks.findIndex(b => b.id === block.id);
@@ -364,7 +409,7 @@ export const MockDb = {
   },
 
   // Document Categories
-  getDocCategories: (): DocumentCategory[] => JSON.parse(localStorage.getItem(STORAGE_KEYS.DOC_CATS) || '[]'),
+  getDocCategories: (): DocumentCategory[] => JSON.parse(localStorage.getItem(STORAGE_KEYS.DOC_CATS) || JSON.stringify(DEFAULT_DOC_CATS)),
   saveDocCategory: (cat: DocumentCategory) => {
     const cats = MockDb.getDocCategories();
     const index = cats.findIndex(c => c.id === cat.id);
@@ -378,40 +423,39 @@ export const MockDb = {
 
   // Documents
   getDocuments: (categoryId?: string) => {
-     const docs: SchoolDocument[] = JSON.parse(localStorage.getItem(STORAGE_KEYS.DOCS) || '[]');
+     const docs: SchoolDocument[] = JSON.parse(localStorage.getItem(STORAGE_KEYS.DOCS) || JSON.stringify(DEFAULT_DOCS));
      return categoryId ? docs.filter(d => d.categoryId === categoryId) : docs;
   },
   saveDocument: (doc: any) => {
-      const docs = JSON.parse(localStorage.getItem(STORAGE_KEYS.DOCS) || '[]');
+      const docs = MockDb.getDocuments();
       const index = docs.findIndex((d:any) => d.id === doc.id);
       if (index >= 0) docs[index] = doc; else docs.unshift(doc);
       safeSetItem(STORAGE_KEYS.DOCS, JSON.stringify(docs));
   },
   deleteDocument: (id: string) => {
-      const docs = JSON.parse(localStorage.getItem(STORAGE_KEYS.DOCS) || '[]').filter((d:any) => d.id !== id);
+      const docs = MockDb.getDocuments().filter((d:any) => d.id !== id);
       safeSetItem(STORAGE_KEYS.DOCS, JSON.stringify(docs));
   },
   
   // Gallery Albums
-  getAlbums: (): GalleryAlbum[] => JSON.parse(localStorage.getItem(STORAGE_KEYS.ALBUMS) || '[]'),
+  getAlbums: (): GalleryAlbum[] => JSON.parse(localStorage.getItem(STORAGE_KEYS.ALBUMS) || JSON.stringify(DEFAULT_ALBUMS)),
   saveAlbum: (album: GalleryAlbum) => {
       const albums = MockDb.getAlbums();
       const index = albums.findIndex(a => a.id === album.id);
       if (index >= 0) albums[index] = album; else albums.unshift(album);
-      safeSetItem(STORAGE_KEYS.ALBUMS, JSON.stringify(albums));
+      if (!safeSetItem(STORAGE_KEYS.ALBUMS, JSON.stringify(albums))) throw new Error("Storage Full");
   },
   deleteAlbum: (id: string) => {
       const albums = MockDb.getAlbums().filter(a => a.id !== id);
       safeSetItem(STORAGE_KEYS.ALBUMS, JSON.stringify(albums));
-      // Optionally delete images in album? For now we just filter them out in UI
   },
 
   // Gallery Images
-  getGallery: () => JSON.parse(localStorage.getItem(STORAGE_KEYS.GALLERY) || '[]'),
+  getGallery: () => JSON.parse(localStorage.getItem(STORAGE_KEYS.GALLERY) || JSON.stringify(DEFAULT_GALLERY)),
   saveImage: (img: any) => {
       const images = JSON.parse(localStorage.getItem(STORAGE_KEYS.GALLERY) || '[]');
       images.unshift(img);
-      safeSetItem(STORAGE_KEYS.GALLERY, JSON.stringify(images));
+      if (!safeSetItem(STORAGE_KEYS.GALLERY, JSON.stringify(images))) throw new Error("Storage Full");
   },
   deleteImage: (id: string) => {
       const images = JSON.parse(localStorage.getItem(STORAGE_KEYS.GALLERY) || '[]').filter((i:any) => i.id !== id);
@@ -419,11 +463,11 @@ export const MockDb = {
   },
 
   // Menu
-  getMenu: () => JSON.parse(localStorage.getItem(STORAGE_KEYS.MENU) || '[]'),
+  getMenu: () => JSON.parse(localStorage.getItem(STORAGE_KEYS.MENU) || JSON.stringify(DEFAULT_MENU)),
   saveMenu: (items: any) => safeSetItem(STORAGE_KEYS.MENU, JSON.stringify(items)),
 
   // Staff
-  getStaff: (): StaffMember[] => JSON.parse(localStorage.getItem(STORAGE_KEYS.STAFF) || '[]'),
+  getStaff: (): StaffMember[] => JSON.parse(localStorage.getItem(STORAGE_KEYS.STAFF) || JSON.stringify(DEFAULT_STAFF)),
   saveStaff: (staff: StaffMember) => {
     const list: StaffMember[] = MockDb.getStaff();
     const index = list.findIndex(s => s.id === staff.id);
